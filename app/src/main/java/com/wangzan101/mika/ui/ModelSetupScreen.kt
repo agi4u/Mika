@@ -67,6 +67,7 @@ import com.wangzan101.mika.settings.ModelOptions
 import com.wangzan101.mika.settings.ProviderConfig
 import com.wangzan101.mika.settings.ProviderPresets
 import com.wangzan101.mika.settings.ProviderStore
+import com.wangzan101.mika.settings.balance.BalanceCatalog
 import com.wangzan101.mika.settings.RoleChoice
 import com.wangzan101.mika.ui.components.ButtonKind
 import com.wangzan101.mika.ui.components.ButtonSize
@@ -140,7 +141,10 @@ fun ModelSetupScreen(
     val role = picking
     when {
         provider != null -> {
-            LaunchedEffect(provider.id) { vm.ensureListed() }
+            LaunchedEffect(provider.id, provider.id in ui.keyed) {
+                vm.ensureListed()
+                vm.loadBalance(provider.id)
+            }
             val accountKind = when {
                 provider.kind == ProviderConfig.Kind.Xai -> SignInKind.Xai
                 provider.signIn == ProviderStore.OPENROUTER_SIGN_IN -> SignInKind.OpenRouter
@@ -164,6 +168,7 @@ fun ModelSetupScreen(
                     })
                 },
                 useAsMain = { vm.useAsMain(provider.id) },
+                refreshBalance = { vm.loadBalance(provider.id) },
             )
             if (allModels) {
                 BackHandler { allModels = false }
@@ -206,6 +211,8 @@ fun ModelSetupScreen(
                     openSignIn = { signInSheet = it },
                     setReasoningEffort = vm::setReasoningEffort,
                     setModelContext = vm::setModelContext,
+                    watchDraftBalance = vm::watchDraftBalance,
+                    refreshDraftBalance = vm::refreshDraftBalance,
                 ),
                 onBack,
             )
@@ -261,6 +268,9 @@ class ModelSetupActions(
     val openSignIn: (SignInKind) -> Unit = {},
     val setReasoningEffort: (ModelRole, String?) -> Unit = { _, _ -> },
     val setModelContext: (String, ModelContextSettings) -> Boolean = { _, _ -> false },
+    /** 添加表单上的余额:Key 变化时稍等再查,点「再查一次」马上查。 */
+    val watchDraftBalance: () -> Unit = {},
+    val refreshDraftBalance: () -> Unit = {},
 )
 
 /**
@@ -416,6 +426,12 @@ private fun AddProviderForm(ui: ModelSetupUi, actions: ModelSetupActions) {
             )
         }
     }
+    LaunchedEffect(f.preset, f.baseUrl, f.apiKey) { actions.watchDraftBalance() }
+    BalanceSection(
+        BalanceCatalog.shownDraft(ui.draftBalance, f.preset, f.baseUrl, f.apiKey),
+        actions.refreshDraftBalance,
+        Modifier.testTag("setup-balance"),
+    )
     // 列表里没有要的模型、或这家不提供列表时,随时可以自己填(没列出模型时那一栏已经在了)
     if (!f.noList) {
         Text(
@@ -578,13 +594,15 @@ private fun ModelContextControl(ui: ModelSetupUi, role: ModelRole,
     if (!open) return
     var window by rememberSaveable(cfg.id) { mutableStateOf(saved.windowTokens?.toString().orEmpty()) }
     var trigger by rememberSaveable(cfg.id) { mutableStateOf(saved.triggerTokens?.toString().orEmpty()) }
+    var readTimeout by rememberSaveable(cfg.id) { mutableStateOf(saved.readTimeoutSeconds?.toString().orEmpty()) }
     var saveFailed by remember { mutableStateOf(false) }
     fun positiveInt(text: String) = text.trim().takeIf { it.all { c -> c in '0'..'9' } }?.toIntOrNull()?.takeIf { it > 0 }
-    val settings = ModelContextSettings(positiveInt(window), positiveInt(trigger))
+    val settings = ModelContextSettings(positiveInt(window), positiveInt(trigger), positiveInt(readTimeout))
     val modelWindow = cfg.capabilities.contextTokens
     val limits = settings.limits(modelWindow)
     val badWindow = window.isNotBlank() && settings.windowTokens == null
     val badTrigger = trigger.isNotBlank() && (settings.triggerTokens == null || (!badWindow && settings.triggerTokens != limits.trigger))
+    val badReadTimeout = readTimeout.isNotBlank() && settings.readTimeoutSeconds == null
     val keyboard = KeyboardOptions(keyboardType = KeyboardType.Number)
     MikaDialog(
         onDismissRequest = { open = false },
@@ -609,15 +627,21 @@ private fun ModelContextControl(ui: ModelSetupUi, role: ModelRole,
                             limits.minTrigger.coerceAtLeast(1), limits.usable))
                         else if (badTrigger) Text(stringResource(R.string.model_context_integer))
                     }, isError = badTrigger)
+                OutlinedTextField(readTimeout, { readTimeout = it; saveFailed = false },
+                    modifier = Modifier.fillMaxWidth().testTag("context-read-timeout"), singleLine = true, keyboardOptions = keyboard,
+                    label = { Text(stringResource(R.string.model_context_read_timeout)) },
+                    placeholder = { Text(stringResource(R.string.model_context_auto, 120)) },
+                    supportingText = if (badReadTimeout) ({ Text(stringResource(R.string.model_context_integer)) }) else null,
+                    isError = badReadTimeout)
                 if (!badWindow && (trigger.isBlank() || settings.triggerTokens != null)) Text(stringResource(R.string.model_context_effective, limits.window, limits.trigger),
                     modifier = Modifier.testTag("context-effective"))
-                TextButton(onClick = { window = ""; trigger = ""; saveFailed = false }) { Text(stringResource(R.string.reset)) }
+                TextButton(onClick = { window = ""; trigger = ""; readTimeout = ""; saveFailed = false }) { Text(stringResource(R.string.reset)) }
                 if (saveFailed) Text(stringResource(R.string.model_context_save_failed), color = MikaTheme.colors.bad)
             }
         },
         confirmButton = { TextButton(onClick = {
             if (onSave(cfg.id, settings)) open = false else saveFailed = true
-        }, enabled = !badWindow && !badTrigger, modifier = Modifier.testTag("context-save")) { Text(stringResource(R.string.save)) } },
+        }, enabled = !badWindow && !badTrigger && !badReadTimeout, modifier = Modifier.testTag("context-save")) { Text(stringResource(R.string.save)) } },
         dismissButton = { TextButton(onClick = { open = false }) { Text(stringResource(R.string.cancel)) } },
     )
 }
