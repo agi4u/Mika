@@ -6,14 +6,15 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ApiKeyTextTest {
-    @Test fun stripsNewlinesAndKeepsTheRest() {
+    @Test fun newlinesStayAndAreIllegal() {
         val n = ApiKeyText.accept("sk-ab\ncd")
-        assertEquals("sk-abcd", n.text)
-        assertEquals(ApiKeyText.Notice.NewlinesRemoved, n.notice)
+        assertEquals("sk-ab\ncd", n.text)
+        assertEquals(ApiKeyText.Notice.IllegalCharacters, n.notice)
+        assertFalse(ApiKeyText.isHeaderLegal(n.text))
         val crlf = ApiKeyText.accept("sk-ab\r\ncd")
-        assertEquals("sk-abcd", crlf.text)
-        assertEquals(ApiKeyText.Notice.NewlinesRemoved, crlf.notice)
-        assertTrue(ApiKeyText.isHeaderLegal(crlf.text))
+        assertEquals("sk-ab\r\ncd", crlf.text)
+        assertEquals(ApiKeyText.Notice.IllegalCharacters, crlf.notice)
+        assertFalse(ApiKeyText.isHeaderLegal(crlf.text))
     }
 
     @Test fun stripsZeroWidthAndBomWithoutTouchingTheKey() {
@@ -25,10 +26,10 @@ class ApiKeyTextTest {
         assertEquals(ApiKeyText.Notice.InvisibleRemoved, bom.notice)
     }
 
-    @Test fun newlineHintWinsWhenInvisibleCharactersWereAlsoRemoved() {
+    @Test fun newlineStaysIllegalEvenWhenInvisibleCharactersAreStripped() {
         val both = ApiKeyText.accept("sk-\u200B\nabc")
-        assertEquals("sk-abc", both.text)
-        assertEquals(ApiKeyText.Notice.NewlinesRemoved, both.notice)
+        assertEquals("sk-\nabc", both.text)
+        assertEquals(ApiKeyText.Notice.IllegalCharacters, both.notice)
     }
 
     @Test fun leavesIllegalCharactersInPlace() {
@@ -44,9 +45,9 @@ class ApiKeyTextTest {
         assertEquals(ApiKeyText.Notice.IllegalCharacters, emoji.notice)
     }
 
-    @Test fun illegalCharactersWinOverAStrippedNewline() {
+    @Test fun newlineAndChineseBothStay() {
         val mixed = ApiKeyText.accept("密钥：sk-\nabc")
-        assertEquals("密钥：sk-abc", mixed.text)
+        assertEquals("密钥：sk-\nabc", mixed.text)
         assertEquals(ApiKeyText.Notice.IllegalCharacters, mixed.notice)
     }
 
@@ -57,5 +58,6 @@ class ApiKeyTextTest {
         assertTrue(ApiKeyText.isHeaderLegal("Bearer sk-1 2"))
         assertTrue(ApiKeyText.isHeaderLegal(""))
         assertFalse(ApiKeyText.isHeaderLegal("Bearer sk-\nabc"))
+        assertFalse(ApiKeyText.isHeaderLegal("Bearer sk-\rabc"))
     }
 }

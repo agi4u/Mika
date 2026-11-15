@@ -1051,34 +1051,43 @@ class ModelSetupViewModelTest {
 
     // ---------- 粘贴进来的 Key 里有换行、零宽或非 ASCII ----------
 
-    /** 中间的换行去掉后按普通 Key 测试并保存,不拦。 */
-    @Test fun newlineInTheKeyIsStrippedAndSavedAsANormalKey() = runTest {
+    /** 中间的换行原样留下,立刻标红,两个保存动作都不发请求、也不存。 */
+    @Test fun newlineInTheKeyIsRejectedAndNotSaved() = runTest {
         listing[deepseekUrl] = deepseek
         val store = store()
         val vm = vm(store)
         vm.setApiKey("sk-ab\ncd")
         val form = vm.state.value.form
-        assertEquals("sk-abcd", form.apiKey)
-        assertEquals(ApiKeyText.Notice.NewlinesRemoved, form.keyNotice)
-        assertTrue(form.canTest)
-        assertTrue(form.canSaveUntested)
+        assertEquals("sk-ab\ncd", form.apiKey)
+        assertEquals(ApiKeyText.Notice.IllegalCharacters, form.keyNotice)
+        assertFalse(form.canTest)
+        assertFalse(form.canSaveUntested)
         vm.testAndSave(); runCurrent()
-        assertEquals("sk-abcd", listCalls.single().third)
-        assertEquals("sk-abcd", store.providerKey(store.providers.value.single().id))
-        assertFalse(vm.state.value.showForm)
+        vm.saveWithoutTest(); runCurrent()
+        assertTrue(listCalls.isEmpty())
+        assertTrue(built.isEmpty())
+        assertTrue(store.providers.value.isEmpty())
+        assertTrue(vm.state.value.showForm)
     }
 
-    /** `\r\n` 同样去掉,剩下的 Key 照旧发出去。 */
-    @Test fun crlfInTheKeyIsStrippedAndDoesNotCrash() = runTest {
+    /** `\r` 和 `\r\n` 同样留下,不改写,也不崩溃。 */
+    @Test fun crlfInTheKeyIsRejectedAndDoesNotCrash() = runTest {
         listing[deepseekUrl] = deepseek
         val store = store()
         val vm = vm(store)
         vm.setApiKey("sk-ab\r\ncd")
-        assertEquals("sk-abcd", vm.state.value.form.apiKey)
-        assertEquals(ApiKeyText.Notice.NewlinesRemoved, vm.state.value.form.keyNotice)
+        assertEquals("sk-ab\r\ncd", vm.state.value.form.apiKey)
+        assertEquals(ApiKeyText.Notice.IllegalCharacters, vm.state.value.form.keyNotice)
+        assertFalse(vm.state.value.form.canTest)
+        assertFalse(vm.state.value.form.canSaveUntested)
+        vm.testAndSave(); runCurrent()
         vm.saveWithoutTest(); runCurrent()
-        assertTrue("换行清掉之后可以直接存,不必先测试", listCalls.isEmpty())
-        assertEquals("sk-abcd", store.providerKey(store.providers.value.single().id))
+        assertTrue(listCalls.isEmpty())
+        assertTrue(store.providers.value.isEmpty())
+        vm.setApiKey("sk-\rcd")
+        assertEquals("sk-\rcd", vm.state.value.form.apiKey)
+        assertEquals(ApiKeyText.Notice.IllegalCharacters, vm.state.value.form.keyNotice)
+        assertFalse(vm.state.value.form.canSaveUntested)
     }
 
     /** 中文前缀留下,立刻标红,测试和直接保存都不发请求、也不存。改掉之后提示跟着消失。 */
@@ -1131,8 +1140,8 @@ class ModelSetupViewModelTest {
         assertTrue(store.providers.value.isEmpty())
     }
 
-    /** 换 Key 走同一套:换行去掉后保存,中文前缀不保存、也不重新列模型。 */
-    @Test fun changeKeyStripsNewlinesAndRefusesIllegalCharacters() = runTest {
+    /** 换 Key 走同一套:换行和中文前缀都不保存、也不重新列模型。零宽去掉后可以换。 */
+    @Test fun changeKeyRefusesNewlinesAndIllegalCharacters() = runTest {
         listing[deepseekUrl] = deepseek
         val store = store()
         val vm = vm(store)
@@ -1140,12 +1149,15 @@ class ModelSetupViewModelTest {
         val id = store.providers.value.single().id
         val listed = listCalls.size
         vm.changeKey(id, "sk-\n2"); runCurrent()
+        assertEquals("换行的 Key 不存", "sk", store.providerKey(id))
+        assertEquals("换行的 Key 不重新列模型", listed, listCalls.size)
+        vm.changeKey(id, "密钥：sk-3"); runCurrent()
+        assertEquals("没存非法的 Key", "sk", store.providerKey(id))
+        assertEquals("非法的 Key 不重新列模型", listed, listCalls.size)
+        vm.changeKey(id, "sk-\u200B2"); runCurrent()
         assertEquals("sk-2", store.providerKey(id))
         assertEquals(listed + 1, listCalls.size)
         assertEquals("sk-2", listCalls.last().third)
-        vm.changeKey(id, "密钥：sk-3"); runCurrent()
-        assertEquals("没存非法的 Key", "sk-2", store.providerKey(id))
-        assertEquals("非法的 Key 不重新列模型", listed + 1, listCalls.size)
     }
 
     /** 列模型时头值仍抛异常:收成失败,不打掉协程,也不把异常原文(可能含 Key)露出去。 */

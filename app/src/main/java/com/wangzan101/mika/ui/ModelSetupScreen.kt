@@ -516,7 +516,7 @@ private fun AddProviderForm(ui: ModelSetupUi, actions: ModelSetupActions) {
 }
 
 /**
- * API Key 这一栏下面的一句:换行或零宽被去掉时用次要文字色,还留着放不进请求头的字符时用错误色。
+ * API Key 这一栏下面的一句:零宽被去掉时用次要文字色,换行或其它放不进请求头的字符用错误色。
  * 和表单上其它 [FooterNote] 同一套字号。
  */
 @Composable
@@ -524,8 +524,6 @@ internal fun ApiKeyNoticeNote(notice: ApiKeyText.Notice, tag: String = "setup-ke
     val c = MikaTheme.colors
     when (notice) {
         ApiKeyText.Notice.None -> Unit
-        ApiKeyText.Notice.NewlinesRemoved ->
-            FooterNote(ModelSetupCopy.KEY_NEWLINES_REMOVED, Modifier.testTag(tag), color = c.ink2)
         ApiKeyText.Notice.InvisibleRemoved ->
             FooterNote(ModelSetupCopy.KEY_INVISIBLE_REMOVED, Modifier.testTag(tag), color = c.ink2)
         ApiKeyText.Notice.IllegalCharacters ->
@@ -735,7 +733,6 @@ object ModelSetupCopy {
     const val API_KEY = "API Key"
     val KEY_HINT: String get() = tr(R.string.model_key_hint)
     val KEY_OPTIONAL: String get() = tr(R.string.model_key_optional)
-    val KEY_NEWLINES_REMOVED: String get() = tr(R.string.model_key_newlines_removed)
     val KEY_INVISIBLE_REMOVED: String get() = tr(R.string.model_key_invisible_removed)
     val KEY_ILLEGAL: String get() = tr(R.string.model_key_illegal_chars)
     val TEST_AND_SAVE: String get() = tr(R.string.model_test_save)

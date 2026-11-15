@@ -117,7 +117,7 @@ data class AddForm(
     val baseUrl: String,
     val apiKey: String,
     /**
-     * 最近一次改 Key 的提示:换行或零宽被去掉,或还留着放不进请求头的字符。
+     * 最近一次改 Key 的提示:零宽被去掉,或还留着放不进请求头的字符(含换行)。
      * [ApiKeyText.Notice.IllegalCharacters] 时不能测试、也不能保存。
      */
     val keyNotice: ApiKeyText.Notice = ApiKeyText.Notice.None,
@@ -431,7 +431,7 @@ class ModelSetupViewModel(
     // 换了接口类型或地址,上次「没列出模型」就不作数了,要重新列
     fun setKind(kind: ProviderConfig.Kind) = edit { it.copy(kind = kind, noList = false) }
     fun setBaseUrl(url: String) = edit { it.copy(baseUrl = url, noList = false) }
-    /** 粘贴或逐字改 Key:去掉换行和零宽,放不进请求头的字符原样留下并立刻标出来。 */
+    /** 粘贴或逐字改 Key:去掉零宽;换行和其它放不进请求头的字符原样留下并立刻标出来。 */
     fun setApiKey(key: String) {
         val accepted = ApiKeyText.accept(key)
         edit { it.copy(apiKey = accepted.text, keyNotice = accepted.notice) }
@@ -586,7 +586,7 @@ class ModelSetupViewModel(
     }
 
     /**
-     * 拿去放进请求头的 Key:再收一次(换行、零宽去掉),首尾空白去掉。
+     * 拿去放进请求头的 Key:再收一次(零宽去掉),首尾空白去掉。换行算放不进头。
      * 还含有放不进头的字符时为 null,调用方不能发请求、也不能保存。
      */
     private fun headerKey(raw: String): String? {
@@ -1219,7 +1219,7 @@ class ModelSetupViewModel(
     }
 
     /**
-     * 换 Key,然后用新 Key 重新列一次模型。换行和零宽先去掉;还含有放不进请求头的字符时不保存、不列模型。
+     * 换 Key,然后用新 Key 重新列一次模型。零宽先去掉;换行和其它放不进请求头的字符不保存、不列模型。
      */
     fun changeKey(providerId: String, apiKey: String) {
         val k = headerKey(apiKey) ?: return

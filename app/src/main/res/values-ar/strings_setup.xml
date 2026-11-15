@@ -24,7 +24,6 @@
     <string name="model_provider_name_hint">Optional, defaults to the host</string>
     <string name="model_key_hint">Paste the key from your provider</string>
     <string name="model_key_optional">Optional for local services</string>
-    <string name="model_key_newlines_removed">أُزيلت فواصل الأسطر من المفتاح.</string>
     <string name="model_key_invisible_removed">أُزيلت المحارف غير المرئية من المفتاح.</string>
     <string name="model_key_illegal_chars">يحتوي المفتاح على محارف لا يمكن استخدامها. الصق المفتاح نفسه فقط.</string>
     <string name="model_test_save">Test and save</string>

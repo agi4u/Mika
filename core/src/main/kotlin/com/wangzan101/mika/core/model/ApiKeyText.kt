@@ -9,42 +9,35 @@ import okhttp3.Request
  * 以及任何大于 0x7E 的字符(中文、emoji、全角符号)都会在构造 Request 时抛 [IllegalArgumentException],
  * 而且发生在发出请求之前,调用方的网络 try/catch 罩不住。
  *
- * 换行和零宽 / BOM 这类看不见的字符直接去掉,剩下的还能当普通 Key 用。放不进请求头的字符原样留下,
- * 由 [Accepted.notice] 标成 [Notice.IllegalCharacters],调用方不要拿去发请求或保存。
+ * 零宽 / BOM 这类看不见的字符直接去掉,剩下的还能当普通 Key 用。换行(`\n`、`\r`)和其它放不进请求头的字符
+ * 原样留下,由 [Accepted.notice] 标成 [Notice.IllegalCharacters],调用方不要拿去发请求或保存。
  */
 object ApiKeyText {
     enum class Notice {
         /** 没有去掉什么,字符也都放得进请求头。 */
         None,
-        /** 去掉了换行或回车;剩下的是可用的 Key。 */
-        NewlinesRemoved,
         /** 只去掉了零宽、BOM 这类看不见的字符;剩下的是可用的 Key。 */
         InvisibleRemoved,
-        /** 还含有放不进请求头的字符。这些字符没有被改掉。 */
+        /** 还含有放不进请求头的字符(含换行)。这些字符没有被改掉。 */
         IllegalCharacters,
     }
 
     data class Accepted(val text: String, val notice: Notice)
 
     /**
-     * 按一次输入(粘贴或逐字改)收 Key:去掉 `\r`、`\n` 和看不见的零宽 / BOM,不改其余字符。
+     * 按一次输入(粘贴或逐字改)收 Key:去掉看不见的零宽 / BOM,不改其余字符。
+     * `\n`、`\r` 留在原文里,和中文、emoji 一样算放不进请求头。
      * 首尾空白留着,由保存时的 `trim()` 处理;中间的普通空格也留着,照旧拿去问服务商。
      */
     fun accept(raw: String): Accepted {
-        var removedNewline = false
         var removedInvisible = false
         val kept = StringBuilder(raw.length)
         for (c in raw) {
-            when {
-                c == '\n' || c == '\r' -> removedNewline = true
-                isInvisible(c) -> removedInvisible = true
-                else -> kept.append(c)
-            }
+            if (isInvisible(c)) removedInvisible = true else kept.append(c)
         }
         val text = kept.toString()
         val notice = when {
             !isHeaderLegal(text) -> Notice.IllegalCharacters
-            removedNewline -> Notice.NewlinesRemoved
             removedInvisible -> Notice.InvisibleRemoved
             else -> Notice.None
         }
