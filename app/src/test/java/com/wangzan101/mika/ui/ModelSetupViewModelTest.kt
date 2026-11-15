@@ -1,6 +1,7 @@
 package com.wangzan101.mika.ui
 
 import com.wangzan101.mika.i18n.ChineseTexts
+import com.wangzan101.mika.core.model.ApiKeyText
 import com.wangzan101.mika.core.model.Capabilities
 import com.wangzan101.mika.core.model.ChatModel
 import com.wangzan101.mika.core.model.ListFailure
@@ -48,6 +49,8 @@ class ModelSetupViewModelTest {
     /** 按地址给出列模型的结果;没写的地址列出空表。 */
     private val listing = mutableMapOf<String, ModelListResult>()
     private val listCalls = mutableListOf<Triple<ProviderConfig.Kind, String, String?>>()
+    /** 下一次列模型抛这个;用来确认异常收成失败,不打掉测试协程。 */
+    private var listBoom: Throwable? = null
     private var ids = 0
 
     private fun store() = ProviderStore(
@@ -55,7 +58,11 @@ class ModelSetupViewModelTest {
         newId = { "id${++ids}" },
         userAgent = "Mika/1.2.3",
         modelFactory = { cfg, _, _, setup -> built += cfg.model to setup; Fake(cfg.capabilities) { reply() } },
-        modelLister = { kind, url, apiKey, _ -> listCalls += Triple(kind, url, apiKey); listing[url] ?: ModelListResult.Ok(emptyList()) },
+        modelLister = { kind, url, apiKey, _ ->
+            listBoom?.let { throw it }
+            listCalls += Triple(kind, url, apiKey)
+            listing[url] ?: ModelListResult.Ok(emptyList())
+        },
     )
 
     /** 建过的模型(模型名、请求头等);「测试并保存」的试调用回什么由 [reply] 定,默认调用试用的工具。 */
@@ -1040,5 +1047,119 @@ class ModelSetupViewModelTest {
         assertEquals("列过的列表留着", listOf("deepseek-chat", "deepseek-reasoner", "deepseek-coder"), after.models!!.map { it.id })
         assertEquals(setOf("deepseek-chat"), after.verifiedModels)
         assertFalse("核实过的模型让这家不算没测过", after.savedUntested)
+    }
+
+    // ---------- 粘贴进来的 Key 里有换行、零宽或非 ASCII ----------
+
+    /** 中间的换行去掉后按普通 Key 测试并保存,不拦。 */
+    @Test fun newlineInTheKeyIsStrippedAndSavedAsANormalKey() = runTest {
+        listing[deepseekUrl] = deepseek
+        val store = store()
+        val vm = vm(store)
+        vm.setApiKey("sk-ab\ncd")
+        val form = vm.state.value.form
+        assertEquals("sk-abcd", form.apiKey)
+        assertEquals(ApiKeyText.Notice.NewlinesRemoved, form.keyNotice)
+        assertTrue(form.canTest)
+        assertTrue(form.canSaveUntested)
+        vm.testAndSave(); runCurrent()
+        assertEquals("sk-abcd", listCalls.single().third)
+        assertEquals("sk-abcd", store.providerKey(store.providers.value.single().id))
+        assertFalse(vm.state.value.showForm)
+    }
+
+    /** `\r\n` 同样去掉,剩下的 Key 照旧发出去。 */
+    @Test fun crlfInTheKeyIsStrippedAndDoesNotCrash() = runTest {
+        listing[deepseekUrl] = deepseek
+        val store = store()
+        val vm = vm(store)
+        vm.setApiKey("sk-ab\r\ncd")
+        assertEquals("sk-abcd", vm.state.value.form.apiKey)
+        assertEquals(ApiKeyText.Notice.NewlinesRemoved, vm.state.value.form.keyNotice)
+        vm.saveWithoutTest(); runCurrent()
+        assertTrue("换行清掉之后可以直接存,不必先测试", listCalls.isEmpty())
+        assertEquals("sk-abcd", store.providerKey(store.providers.value.single().id))
+    }
+
+    /** 中文前缀留下,立刻标红,测试和直接保存都不发请求、也不存。改掉之后提示跟着消失。 */
+    @Test fun chinesePrefixIsRejectedAndNotSaved() = runTest {
+        listing[deepseekUrl] = deepseek
+        val store = store()
+        val vm = vm(store)
+        vm.setApiKey("密钥：sk-abc123")
+        val form = vm.state.value.form
+        assertEquals("密钥：sk-abc123", form.apiKey)
+        assertEquals(ApiKeyText.Notice.IllegalCharacters, form.keyNotice)
+        assertFalse(form.canTest)
+        assertFalse(form.canSaveUntested)
+        vm.testAndSave(); runCurrent()
+        vm.saveWithoutTest(); runCurrent()
+        assertTrue(listCalls.isEmpty())
+        assertTrue(built.isEmpty())
+        assertTrue(store.providers.value.isEmpty())
+        assertTrue(vm.state.value.showForm)
+        vm.setApiKey("sk-abc123")
+        assertEquals(ApiKeyText.Notice.None, vm.state.value.form.keyNotice)
+        assertTrue(vm.state.value.form.canTest)
+    }
+
+    /** 零宽空格去掉后按普通 Key 用,不标成非法字符。 */
+    @Test fun zeroWidthSpaceIsStrippedAndTreatedAsANormalKey() = runTest {
+        listing[deepseekUrl] = deepseek
+        val store = store()
+        val vm = vm(store)
+        vm.setApiKey("sk-\u200Babc")
+        assertEquals("sk-abc", vm.state.value.form.apiKey)
+        assertEquals(ApiKeyText.Notice.InvisibleRemoved, vm.state.value.form.keyNotice)
+        assertTrue(vm.state.value.form.canTest)
+        vm.testAndSave(); runCurrent()
+        assertEquals("sk-abc", listCalls.single().third)
+        assertEquals("sk-abc", store.providerKey(store.providers.value.single().id))
+    }
+
+    /** 中间的普通空格不是非法字符:照旧拿去问服务商,失败走原来的「连接失败」。 */
+    @Test fun spaceInsideTheKeyStillHitsTheProvider() = runTest {
+        listing[deepseekUrl] = ModelListResult.Failed(ListFailure.Auth)
+        val store = store()
+        val vm = vm(store)
+        vm.setApiKey("sk-1 2")
+        assertEquals(ApiKeyText.Notice.None, vm.state.value.form.keyNotice)
+        assertTrue(vm.state.value.form.canTest)
+        vm.testAndSave(); runCurrent()
+        assertEquals("sk-1 2", listCalls.single().third)
+        assertEquals(ListState.Failed(ListFailure.Auth.text), vm.state.value.form.test)
+        assertTrue(store.providers.value.isEmpty())
+    }
+
+    /** 换 Key 走同一套:换行去掉后保存,中文前缀不保存、也不重新列模型。 */
+    @Test fun changeKeyStripsNewlinesAndRefusesIllegalCharacters() = runTest {
+        listing[deepseekUrl] = deepseek
+        val store = store()
+        val vm = vm(store)
+        vm.setApiKey("sk"); vm.testAndSave(); runCurrent()
+        val id = store.providers.value.single().id
+        val listed = listCalls.size
+        vm.changeKey(id, "sk-\n2"); runCurrent()
+        assertEquals("sk-2", store.providerKey(id))
+        assertEquals(listed + 1, listCalls.size)
+        assertEquals("sk-2", listCalls.last().third)
+        vm.changeKey(id, "密钥：sk-3"); runCurrent()
+        assertEquals("没存非法的 Key", "sk-2", store.providerKey(id))
+        assertEquals("非法的 Key 不重新列模型", listed + 1, listCalls.size)
+    }
+
+    /** 列模型时头值仍抛异常:收成失败,不打掉协程,也不把异常原文(可能含 Key)露出去。 */
+    @Test fun listingExceptionDoesNotCrashAndHidesTheHeaderValue() = runTest {
+        listing[deepseekUrl] = deepseek
+        val store = store()
+        val vm = vm(store)
+        vm.setApiKey("sk"); vm.testAndSave(); runCurrent()
+        val id = store.providers.value.single().id
+        listBoom = IllegalArgumentException("Unexpected char 0x0a in Authorization value: Bearer sk-\nabc")
+        vm.refresh(id); runCurrent()
+        val failed = vm.state.value.listing[id] as ListState.Failed
+        assertEquals("Key 里有无法使用的字符，请只粘贴密钥本身。", failed.message)
+        assertFalse(failed.message.contains("Bearer"))
+        assertEquals("sk", store.providerKey(id))
     }
 }
