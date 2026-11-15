@@ -1112,6 +1112,33 @@ class ModelSetupViewModelTest {
         assertTrue(vm.state.value.form.canTest)
     }
 
+    /** 清空等于把整段删掉:红字和「去掉不可见字符」都收起,空着时两个保存动作仍不可用。 */
+    @Test fun clearingTheKeyDropsHintsAndLeavesSaveDisabled() = runTest {
+        val store = store()
+        val vm = vm(store)
+        vm.setApiKey("密钥：sk-\nabc")
+        assertEquals(ApiKeyText.Notice.IllegalCharacters, vm.state.value.form.keyNotice)
+        vm.setApiKey("")
+        assertEquals("", vm.state.value.form.apiKey)
+        assertEquals(ApiKeyText.Notice.None, vm.state.value.form.keyNotice)
+        assertFalse(vm.state.value.form.canTest)
+        assertFalse(vm.state.value.form.canSaveUntested)
+        vm.testAndSave(); runCurrent()
+        vm.saveWithoutTest(); runCurrent()
+        assertTrue(listCalls.isEmpty())
+        assertTrue(store.providers.value.isEmpty())
+
+        vm.setApiKey("sk-\u200Babc")
+        assertEquals("sk-abc", vm.state.value.form.apiKey)
+        assertEquals(ApiKeyText.Notice.InvisibleRemoved, vm.state.value.form.keyNotice)
+        assertTrue(vm.state.value.form.canTest)
+        vm.setApiKey("")
+        assertEquals("", vm.state.value.form.apiKey)
+        assertEquals(ApiKeyText.Notice.None, vm.state.value.form.keyNotice)
+        assertFalse(vm.state.value.form.canTest)
+        assertFalse(vm.state.value.form.canSaveUntested)
+    }
+
     /** 零宽空格去掉后按普通 Key 用,不标成非法字符。 */
     @Test fun zeroWidthSpaceIsStrippedAndTreatedAsANormalKey() = runTest {
         listing[deepseekUrl] = deepseek

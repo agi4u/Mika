@@ -57,6 +57,9 @@ class ApiKeyTextTest {
         assertEquals(ApiKeyText.Notice.None, ApiKeyText.accept("sk-\tabc").notice)
         assertTrue(ApiKeyText.isHeaderLegal("Bearer sk-1 2"))
         assertTrue(ApiKeyText.isHeaderLegal(""))
+        val cleared = ApiKeyText.accept("")
+        assertEquals("", cleared.text)
+        assertEquals(ApiKeyText.Notice.None, cleared.notice)
         assertFalse(ApiKeyText.isHeaderLegal("Bearer sk-\nabc"))
         assertFalse(ApiKeyText.isHeaderLegal("Bearer sk-\rabc"))
     }

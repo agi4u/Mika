@@ -456,6 +456,9 @@ private fun AddProviderForm(ui: ModelSetupUi, actions: ModelSetupActions) {
             ModelSetupCopy.API_KEY, f.apiKey, actions.setApiKey,
             if (f.keyRequired) ModelSetupCopy.KEY_HINT else ModelSetupCopy.KEY_OPTIONAL, first = !f.urlEditable,
             keyboard = KeyboardType.Password, secret = !showKey, modifier = Modifier.testTag("setup-api-key"),
+            onClear = { actions.setApiKey("") },
+            clearDescription = stringResource(R.string.model_key_clear),
+            clearModifier = Modifier.testTag("setup-api-key-clear"),
         ) {
             Text(if (showKey) stringResource(R.string.hide) else stringResource(R.string.show), Modifier.clickable { showKey = !showKey }, fontSize = 13.sp, color = c.accent)
         }
