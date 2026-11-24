@@ -5,9 +5,21 @@ package com.wangzan101.mika.capsule
 
 import com.wangzan101.mika.R
 import com.wangzan101.mika.i18n.tr
+import android.view.HapticFeedbackConstants
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.runtime.rememberUpdatedState
+import com.wangzan101.mika.capsule.region.CameraPress
+import com.wangzan101.mika.capsule.region.RegionCopy
+import kotlin.math.hypot
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,6 +51,9 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.onLongClick
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
@@ -69,20 +84,70 @@ internal fun InputRow(field: CardInput, ui: CardInputUi, actions: CardActions, s
         // 只有「补充/改要求」才需要选交给当前任务还是排下一件;回答、接着说、开始新任务不显示
         if (field.kind == CardInputKind.Steer) CapsuleFollowUpMode(ui.followUpMode, actions::setFollowUpMode)
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            CameraKey(actions::captureScreen)
+            CameraKey(actions::captureScreen, actions::captureRegion)
             Box(Modifier.weight(1f)) { InputField(shown, ui, actions, stop) }
         }
     }
 }
 
-/** 输入框左边的截屏按钮:圆钮里一块屏。 */
+/**
+ * 输入框左边的截屏按钮:点一下截整屏,按住走区域截图。
+ * 长按到点之后松手不再算点按。读屏的点按是整屏,长按操作是区域截图。
+ */
 @Composable
-private fun CameraKey(onClick: () -> Unit) {
+private fun CameraKey(onClick: () -> Unit, onRegion: () -> Unit) {
     val c = MikaTheme.colors
+    val click = rememberUpdatedState(onClick)
+    val region = rememberUpdatedState(onRegion)
+    val view = LocalView.current
     Box(
         Modifier.testTag("capsule-camera").size(38.dp).clip(MikaShapes.Pill).background(c.ink.copy(alpha = 0.05f))
-            .clickable(role = Role.Button, onClickLabel = ScreenCopy.CAMERA, onClick = onClick)
-            .semantics { contentDescription = ScreenCopy.CAMERA },
+            .pointerInput(Unit) {
+                val slop = viewConfiguration.touchSlop
+                val timeout = viewConfiguration.longPressTimeoutMillis
+                coroutineScope {
+                    val scope = this
+                    awaitEachGesture {
+                        val down = awaitFirstDown()
+                        val press = CameraPress(slop)
+                        press.down()
+                        val job = scope.launch {
+                            delay(timeout)
+                            if (press.longPress()) {
+                                view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                                region.value()
+                            }
+                        }
+                        down.consume()
+                        try {
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                change.consume()
+                                val dist = hypot(
+                                    (change.position.x - down.position.x).toDouble(),
+                                    (change.position.y - down.position.y).toDouble(),
+                                ).toFloat()
+                                press.move(dist)
+                                if (!change.pressed) {
+                                    val release = press.up()
+                                    job.cancel()
+                                    if (release == CameraPress.Release.Click) click.value()
+                                    break
+                                }
+                            }
+                        } finally {
+                            job.cancel()
+                        }
+                    }
+                }
+            }
+            .semantics {
+                role = Role.Button
+                contentDescription = ScreenCopy.CAMERA
+                onClick(label = ScreenCopy.CAMERA) { click.value(); true }
+                onLongClick(label = RegionCopy.action) { region.value(); true }
+            },
         contentAlignment = Alignment.Center,
     ) {
         Icon(MikaIcons.Camera, null, Modifier.size(18.dp), tint = c.ink2)

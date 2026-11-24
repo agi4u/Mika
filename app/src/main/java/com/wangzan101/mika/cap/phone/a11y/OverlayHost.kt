@@ -231,6 +231,27 @@ class OverlayHost internal constructor(private val service: ScreenAccessibility)
      */
     suspend fun <T> passInjectedGesturesThrough(block: suspend () -> T): T = injectedGestures.passThrough(block)
 
+    /**
+     * 把此刻所有浮层藏起来,返回恢复动作。区域截图在截屏前调用,避免把球、卡片、键盘以外的自己的条也截进去。
+     * 之后新加的窗口(冻结帧)不在这份名单里,不会被一起藏住。
+     */
+    internal fun conceal(): OverlayConceal {
+        val prev = windows.toList().map { it to it.shown }
+        windows.toList().forEach { it.setVisible(false) }
+        return OverlayConceal(prev)
+    }
+
+    /** 等藏起来的那一帧交给合成器。没有窗口时也空等两帧,给输入法让开的时间。 */
+    internal suspend fun awaitFrames() {
+        val anchor = windows.firstOrNull { it.isOpen }
+        if (anchor != null) anchor.awaitPresented()
+        else repeat(2) {
+            kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+                Choreographer.getInstance().postFrameCallback { if (cont.isActive) cont.resume(Unit) }
+            }
+        }
+    }
+
     /** 拆掉全部浮层(服务断开时)。 */
     fun closeAll() {
         windows.toList().forEach(OverlayWindow::close)
@@ -248,6 +269,17 @@ class OverlayHost internal constructor(private val service: ScreenAccessibility)
     }
 }
 
+/** 一次 [OverlayHost.conceal]:把当时可见的浮层按原样放回来。重复调用只有第一次生效。 */
+internal class OverlayConceal(private val prev: List<Pair<OverlayWindow, Boolean>>) {
+    private var restored = false
+
+    fun restore() {
+        if (restored) return
+        restored = true
+        prev.forEach { (window, visible) -> if (window.isOpen) window.setVisible(visible) }
+    }
+}
+
 /** [OverlayHost.open] 加上的一个窗口。拆掉之后再调用什么都不做。 */
 class OverlayWindow internal constructor(
     private val host: OverlayHost,
@@ -257,6 +289,10 @@ class OverlayWindow internal constructor(
     private val touchable: Boolean,
 ) {
     var isOpen = true
+        private set
+
+    /** 调用方上次要求显示还是藏起。和 [setVisible] 一起变,conceal 靠它恢复。 */
+    internal var shown: Boolean = true
         private set
 
     /** 窗口此刻的宽高(像素);还没排版时为 0。 */
@@ -333,22 +369,45 @@ class OverlayWindow internal constructor(
      */
     fun setVisible(visible: Boolean) {
         if (!isOpen) return
+        shown = visible
         frame.visibility = if (visible) View.VISIBLE else View.INVISIBLE
+    }
+
+    /** 内容改成铺满窗口。全屏冻结帧要用它,包住内容的测量到不了屏幕边。 */
+    fun fillContent() {
+        if (!isOpen) return
+        val child = frame.getChildAt(0) ?: return
+        child.layoutParams = FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+        )
+        child.requestLayout()
     }
 
     /**
      * 能不能接收键盘:要在浮层里打字时打开(输入法才会弹出来对着它),收起时立刻关上,把焦点还给下面的 App。
+     * [showIme] 为 false 时窗口能收返回键,但先不把输入法叫出来(冻结帧要保持 1:1,不能被键盘挤变形)。
      */
-    fun setFocusable(focusable: Boolean) {
+    fun setFocusable(focusable: Boolean, showIme: Boolean = focusable) {
         if (!isOpen) return
         val flags = if (focusable) params.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
             else params.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-        if (flags == params.flags) return
+        val mode = when {
+            focusable && showIme ->
+                WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE or WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
+            focusable ->
+                WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN or WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
+            else -> WindowManager.LayoutParams.SOFT_INPUT_STATE_UNSPECIFIED
+        }
+        if (flags == params.flags && params.softInputMode == mode) return
         params.flags = flags
-        params.softInputMode = if (focusable) {
-            WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE or WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
-        } else WindowManager.LayoutParams.SOFT_INPUT_STATE_UNSPECIFIED
+        params.softInputMode = mode
         update()
+        if (focusable) {
+            frame.isFocusable = true
+            frame.isFocusableInTouchMode = true
+            frame.requestFocus()
+        }
     }
 
     /**
@@ -361,18 +420,26 @@ class OverlayWindow internal constructor(
         if (!isOpen || content == null) return block()
         content.visibility = View.INVISIBLE
         try {
-            withTimeoutOrNull(GONE_WAIT_MS) {
-                suspendCancellableCoroutine { cont ->
-                    frame.viewTreeObserver.registerFrameCommitCallback { if (cont.isActive) cont.resume(Unit) }
-                    frame.invalidate()
-                }
-            }
-            repeat(GONE_FRAMES) {
-                suspendCancellableCoroutine { cont -> Choreographer.getInstance().postFrameCallback { if (cont.isActive) cont.resume(Unit) } }
-            }
+            awaitPresented()
             return block()
         } finally {
             if (isOpen) content.visibility = View.VISIBLE
+        }
+    }
+
+    /** 藏起来或刚加上的那一帧交给合成器,再等两个刷新。 */
+    internal suspend fun awaitPresented() {
+        if (!isOpen) return
+        withTimeoutOrNull(GONE_WAIT_MS) {
+            suspendCancellableCoroutine { cont ->
+                frame.viewTreeObserver.registerFrameCommitCallback { if (cont.isActive) cont.resume(Unit) }
+                frame.invalidate()
+            }
+        }
+        repeat(GONE_FRAMES) {
+            suspendCancellableCoroutine { cont ->
+                Choreographer.getInstance().postFrameCallback { if (cont.isActive) cont.resume(Unit) }
+            }
         }
     }
 

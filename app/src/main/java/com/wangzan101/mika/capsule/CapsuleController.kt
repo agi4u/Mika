@@ -479,6 +479,7 @@ class CapsuleController(
         override fun freshChat(fresh: Boolean) = this@CapsuleController.freshChat(fresh)
         override fun loadEarlier() = this@CapsuleController.loadEarlier()
         override fun captureScreen() = captureForCard()
+        override fun captureRegion() = startRegionCapture()
         override fun dropScreen() {
             inputUi = inputUi.copy(screen = null)
         }

@@ -102,13 +102,16 @@ object BitmapImageOps : ImageOps {
         IntArray(bmp.width * bmp.height).also { bmp.getPixels(it, 0, bmp.width, 0, 0, bmp.width, bmp.height) }
     }
 
-    override fun isMostlyBlack(img: ByteArray): Boolean = use(img) { bmp ->
+    override fun isMostlyBlack(img: ByteArray): Boolean = use(img) { isMostlyBlack(it) }
+
+    /** 和字节版同一套抽样:防截屏页面在安卓 14 以前截出来几乎全黑。 */
+    fun isMostlyBlack(bmp: Bitmap): Boolean {
         val sx = max(1, bmp.width / SAMPLE_SIDE); val sy = max(1, bmp.height / SAMPLE_SIDE)
         var total = 0; var black = 0
         for (y in 0 until bmp.height step sy) for (x in 0 until bmp.width step sx) {
             total++
             if (luma(bmp.getPixel(x, y)) < BLACK_LUMA) black++
         }
-        black >= total * BLACK_SHARE
+        return black >= total * BLACK_SHARE
     }
 }

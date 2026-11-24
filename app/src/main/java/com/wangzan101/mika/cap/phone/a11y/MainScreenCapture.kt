@@ -102,6 +102,8 @@ internal object MainScreenCapture {
         width = width, height = height, hasWindow = r.anyAppWindow, windows = r.windows,
     )
 
+    internal fun snapshot(read: ScreenRead, width: Int, height: Int) = snapshotOf(read, width, height)
+
     private suspend fun recognize(bmp: Bitmap) = try {
         withTimeoutOrNull(OCR_WAIT_MS) { PhoneOcr.read(bmp.copy(Bitmap.Config.ARGB_8888, false)) }
     } catch (e: CancellationException) {

@@ -172,6 +172,8 @@ internal fun CapsuleController.resetCard() {
 
 /** 两个窗口交替时显式显隐;空内容只负责排版,不承担把系统窗口旧帧撤下屏幕的职责。 */
 internal fun CapsuleController.syncWindowVisibility() {
+    // 截屏和框选期间由 conceal 管可见性,这里再改会把已经藏起的球和卡片露回去
+    if (capturing) return
     val visible = capsuleWindowVisibility(expanded, cardOut, closing)
     window?.setVisible(visible.capsule)
     cardWindow?.setVisible(visible.card)
@@ -183,6 +185,7 @@ internal fun CapsuleController.syncWindowVisibility() {
  * 系统画布上会留着最后一帧「转文字…」,面板看上去就卡在屏幕上了。
  */
 internal fun CapsuleController.syncPanelWindow() {
+    if (capturing) return
     val w = panelWindow ?: return
     if (talk.active) {
         w.setFullScreen(true)

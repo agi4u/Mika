@@ -10,7 +10,6 @@ import java.util.UUID
 import kotlinx.coroutines.withContext
 import com.wangzan101.mika.MikaApp
 import com.wangzan101.mika.cap.phone.a11y.MainScreenCapture
-import com.wangzan101.mika.cap.phone.a11y.OverlayWindow
 import com.wangzan101.mika.cap.phone.a11y.ScreenAccessibility
 import com.wangzan101.mika.task.ConfirmationNotifier
 import com.wangzan101.mika.core.screen.user.CapturedScreen
@@ -167,47 +166,73 @@ internal fun CapsuleController.captureForCard() {
 }
 
 /**
+ * 藏起 Mika 自己的全部浮层后截下主屏。普通截屏截完就把浮层放回来;
+ * 区域截图要拿着这一帧去框选,[keepHidden] 时由返回的 [FreshShot.conceal] 负责恢复。
+ * 前台是 Mika 自己、没授权、截不到时为 null,浮层已经恢复。
+ */
+internal suspend fun CapsuleController.takeFreshShot(keepHidden: Boolean): FreshShot? {
+    val service = windowOn ?: return null
+    if (window == null || cardWindow == null) return null
+    if (inputUi.open) {
+        closeInput()
+        withTimeoutOrNull(IME_GONE_MS) { while (imeTop != null) delay(IME_POLL_MS) }
+    }
+    val store = (context.applicationContext as MikaApp).appAccess
+    val sources = MainScreenCapture.sourcePackages(service) ?: return null
+    if (context.packageName in sources || !store.current().available) return null
+    for (pkg in sources) {
+        if (!store.current().canShare(pkg) && !com.wangzan101.mika.cap.phone.a11y.requestScreenShare(service, store, pkg, appLabel(pkg))) return null
+    }
+    val conceal = service.overlays().conceal()
+    var keep = false
+    try {
+        service.overlays().awaitFrames()
+        if (MainScreenCapture.sourcePackages(service) != sources || sources.any { !store.current().canShare(it) }) return null
+        val (shot, read) = MainScreenCapture.shoot(service)
+        if (MainScreenCapture.sourcePackages(service) != sources || sources.any { !store.current().canShare(it) }) {
+            (shot as? ScreenAccessibility.MainShot.Ok)?.bitmap?.recycle()
+            return null
+        }
+        val result = FreshShot(sources, service.overlays().area(), shot, read, if (keepHidden) conceal else null)
+        keep = keepHidden
+        return result
+    } finally {
+        if (!keep) conceal.restore()
+    }
+}
+
+/**
  * 截下用户此刻的屏幕:输入框开着先收起(等输入法下去),浮层藏起来、真的从屏幕上下去了再截,截完马上出来、一颗上闪一下;
  * 再在后台整理屏上的字。前台是 Mika 自己、截不到时为 null。
  */
 internal suspend fun CapsuleController.captureScreen(): CapturedScreen? {
     val service = windowOn ?: return null
-    val w = window ?: return null
-    val c = cardWindow ?: return null
     capturing = true
     try {
-        if (inputUi.open) {
-            closeInput()
-            withTimeoutOrNull(IME_GONE_MS) { while (imeTop != null) delay(IME_POLL_MS) }
-        }
-        // 空着的那个窗口(展开时一颗那个、收起时卡片那个)不画东西,不用等它
-        suspend fun <T> OverlayWindow.hidden(block: suspend () -> T): T = if (height > 0) hiddenWhile(block) else block()
-        val store = (context.applicationContext as MikaApp).appAccess
-        val sources = MainScreenCapture.sourcePackages(service) ?: return null
-        if (context.packageName in sources || !store.current().available) return null
-        for (pkg in sources) {
-            if (!store.current().canShare(pkg) && !com.wangzan101.mika.cap.phone.a11y.requestScreenShare(service, store, pkg, appLabel(pkg))) return null
-        }
-        val capture = w.hidden { c.hidden {
-            if (MainScreenCapture.sourcePackages(service) != sources || sources.any { !store.current().canShare(it) }) null
-            else MainScreenCapture.shoot(service)
-        } } ?: return null
-        val (shot, read) = capture
-        if (MainScreenCapture.sourcePackages(service) != sources || sources.any { !store.current().canShare(it) }) {
-            (shot as? ScreenAccessibility.MainShot.Ok)?.bitmap?.recycle()
-            return null
-        }
+        val fresh = takeFreshShot(keepHidden = false) ?: return null
         flash++
         wake()
-        val area = service.overlays().area()
-        val r = MainScreenCapture.build(service, shot, read, area.insetTop, area.insetBottom) { ConfirmationNotifier.appLabel(context, it) }
-        if (sources.any { !store.current().canShare(it) } || MainScreenCapture.sourcePackages(service) != sources) return null
+        val area = fresh.area
+        val r = MainScreenCapture.build(service, fresh.shot, fresh.read, area.insetTop, area.insetBottom) { ConfirmationNotifier.appLabel(context, it) }
+        val store = (context.applicationContext as MikaApp).appAccess
+        if (fresh.sources.any { !store.current().canShare(it) } || MainScreenCapture.sourcePackages(service) != fresh.sources) return null
         val captured = (r as? MainScreenCapture.Result.Captured)?.shot ?: return null
-        return CapturedScreen(captured.jpeg, captured.screen, sources)
+        return CapturedScreen(captured.jpeg, captured.screen, fresh.sources)
     } finally {
         capturing = false
+        syncWindowVisibility()
+        syncPanelWindow()
     }
 }
+
+/** 一次静默截屏。[conceal] 非空时浮层还藏着,用完要恢复。 */
+internal class FreshShot(
+    val sources: Set<String>,
+    val area: com.wangzan101.mika.cap.phone.a11y.OverlayArea,
+    val shot: ScreenAccessibility.MainShot,
+    val read: com.wangzan101.mika.cap.phone.a11y.ScreenRead?,
+    val conceal: com.wangzan101.mika.cap.phone.a11y.OverlayConceal?,
+)
 
 /**
  * 在对话 [conversationId] 里开始说 [text];别的任务在跑时排上,不丢。卡片接着跟这个对话;

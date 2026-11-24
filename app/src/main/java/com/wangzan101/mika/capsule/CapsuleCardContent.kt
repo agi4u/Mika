@@ -106,6 +106,8 @@ interface CardActions {
     fun loadEarlier()
     /** 输入框左边的截屏按钮:卡片先藏起来,截下用户此刻的屏幕,挂在输入框上面。 */
     fun captureScreen()
+    /** 长按截屏按钮:冻结当前画面后框选。点按仍走 [captureScreen],长按不会再点按一次。 */
+    fun captureRegion() {}
     /** 附件条上的 ×:不要这张截图。 */
     fun dropScreen()
     /** 留在后台运行的那一页的卡片上的「关闭网页」。 */

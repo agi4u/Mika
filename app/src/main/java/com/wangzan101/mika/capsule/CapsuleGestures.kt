@@ -112,7 +112,7 @@ internal fun CapsuleController.freshChat(fresh: Boolean) {
 
 /** 收起卡片:输入框马上收起(焦点还给下面的 App),卡片缩回那一颗的方位后([closed])才真的收起;关了动画时直接收起。 */
 internal fun CapsuleController.collapse() {
-    if (!expanded) return
+    if (capturing || !expanded) return
     closeInput()
     if (closing) return
     if (animationsOff(context) || card == null) {
