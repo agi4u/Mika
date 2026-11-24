@@ -1,5 +1,6 @@
 package com.wangzan101.mika.capsule
 
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import com.wangzan101.mika.R
@@ -12,6 +13,7 @@ import com.wangzan101.mika.voice.SpeechFailure
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import com.wangzan101.mika.capsule.CapsuleController.Companion.TAG
 import com.wangzan101.mika.capsule.CapsuleController.Companion.NOTE_SENT_MS
 import com.wangzan101.mika.capsule.CapsuleController.Companion.NOTE_SHORT_MS
 import com.wangzan101.mika.capsule.CapsuleController.Companion.NOTE_LONG_MS
@@ -32,6 +34,7 @@ internal fun CapsuleController.toggleTalk() {
  * 没有录音权限(胶囊弹不了权限框)、语音输入用不了时不录,胶囊上说一句,点一下打开 Mika。
  */
 internal fun CapsuleController.beginTalk(byTouch: Boolean) {
+    Log.i(TAG, "gesture=ball-talk touch=$byTouch")
     val v = view ?: return
     // 松开后还在转时可以重新按:上一段由 talk.begin 丢掉
     if (capturing || (talk.active && !talk.released) || !canTalk()) return

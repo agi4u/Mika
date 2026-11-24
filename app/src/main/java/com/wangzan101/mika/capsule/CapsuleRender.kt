@@ -98,6 +98,7 @@ internal fun CapsuleController.openWindows(service: ScreenAccessibility): Overla
     syncPanelWindow()
     for (it in listOf(ball, cardW)) it.onResize(::place)
     ball.onTouch { e ->
+        if (e.actionMasked == android.view.MotionEvent.ACTION_DOWN) Log.i(TAG, "ball-down ${e.rawX},${e.rawY}")
         // Replacing the half-circle on ACTION_DOWN would turn the same touch into a full-ball click.
         if (!edgeHidden) wake()
         capsuleTouch = Touch(e.eventTime, e.rawX, e.rawY, e.source)

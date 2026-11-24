@@ -17,6 +17,7 @@ import com.wangzan101.mika.capsule.CapsuleController.Companion.TAG
 // 胶囊:点按、展开收起与卡片动作
 /** 胶囊上闪着一句时点它:那句说要打开 Mika 就打开,否则只收掉那句;这一下不参与单击或双击计时。 */
 internal fun CapsuleController.tapCapsule() {
+    Log.i(TAG, "ball-tap capturing=$capturing")
     val n = note
     clearNote()
     if (n != null) {

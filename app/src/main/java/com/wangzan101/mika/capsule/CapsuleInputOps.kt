@@ -136,6 +136,7 @@ internal fun CapsuleController.deliver(c: CardView, kind: CardInputKind, shot: C
  * 那张卡片没有输入框(要你接管、同意)时没有地方预览,就和单击一样只展开。
  */
 internal fun CapsuleController.previewScreen() {
+    Log.i(TAG, "gesture=double-tap-screen")
     val v = view ?: return
     if (capturing) return
     scope.launch {
@@ -157,6 +158,7 @@ internal fun CapsuleController.previewScreen() {
 
 /** 卡片里的截屏按钮:截下来挂在输入框上面,补不补一句都行。 */
 internal fun CapsuleController.captureForCard() {
+    Log.i(TAG, "gesture=camera-click")
     if (capturing) return
     scope.launch {
         val shot = captureScreen() ?: return@launch

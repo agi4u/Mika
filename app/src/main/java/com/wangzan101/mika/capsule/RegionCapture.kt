@@ -40,6 +40,7 @@ import kotlin.coroutines.resume
 
 /** 长按卡片里的相机:藏起自己的浮层后马上截整屏,铺成 1:1 冻结帧让用户框选。取消不改已有输入和待发图。 */
 internal fun CapsuleController.startRegionCapture() {
+    Log.i(TAG, "gesture=camera-long-press")
     if (capturing) return
     capturing = true
     val snapshot = inputUi
@@ -65,6 +66,7 @@ internal fun CapsuleController.startRegionCapture() {
                         } else {
                             val screenW = fresh.area.width.takeIf { it > 0 } ?: bmp.width
                             val screenH = fresh.area.height.takeIf { it > 0 } ?: bmp.height
+                            Log.i(TAG, "region-bitmap ${bmp.width}x${bmp.height} area=${screenW}x${screenH} inset=${fresh.area.insetLeft},${fresh.area.insetTop},${fresh.area.insetRight},${fresh.area.insetBottom}")
                             val snap = fresh.read?.let { MainScreenCapture.snapshot(it, screenW, screenH) }
                             if (snap != null && UserScreenText.needsOcr(snap)) {
                                 val copy = runCatching { bmp.copy(Bitmap.Config.ARGB_8888, false) }.getOrNull()
@@ -72,6 +74,11 @@ internal fun CapsuleController.startRegionCapture() {
                             }
                             val edit = editRegion(bmp, fresh.area.insetTop, fresh.area.insetBottom)
                             val crop = edit?.crop
+                            Log.i(
+                                TAG,
+                                if (edit == null || crop == null) "region-result=cancel"
+                                else "region-result=confirm crop=${crop.l},${crop.t},${crop.r},${crop.b} ${crop.width}x${crop.height} marks=${edit.marks.joinToString(",") { it::class.simpleName ?: "?" }}",
+                            )
                             if (edit == null || crop == null || crop.width < MIN_CONFIRM || crop.height < MIN_CONFIRM) {
                                 restoreRegionInput(snapshot, null)
                                 reopen = snapshot.open && expanded

@@ -1,6 +1,7 @@
 package com.wangzan101.mika.capsule.region
 
 import android.graphics.Bitmap
+import android.util.Log
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -19,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
@@ -102,12 +104,27 @@ internal fun RegionCaptureOverlay(
         block()
     }
     LaunchedEffect(model.textAt != null) { onIme(model.textAt != null) }
+    // 窗口被系统拆掉时也要结束这次框选,否则 capturing 会一直为真,胶囊再点不开。
+    DisposableEffect(Unit) {
+        onDispose {
+            Log.i("MikaRegion", "overlay-disposed")
+            finish(onCancel)
+        }
+    }
     Box(
         Modifier.fillMaxSize().testTag("region-overlay").onSizeChanged { size ->
             val prev = base
+            if (size.width > 0 && size.height > 0) {
+                val map = FrameMap.of(size.width, size.height, bitmap.width, bitmap.height)
+                Log.i(
+                    "MikaRegion",
+                    "frame view=${size.width}x${size.height} bmp=${bitmap.width}x${bitmap.height} scale=${map.scale} origin=${map.originX},${map.originY} content=${map.contentW}x${map.contentH} inset=$insetTopPx,$insetBottomPx",
+                )
+            }
             if (prev == null) {
                 if (size.width > 0 && size.height > 0) base = intArrayOf(size.width, size.height)
             } else if (aspectShift(prev[0], prev[1], size.width, size.height)) {
+                Log.i("MikaRegion", "rotated ${prev[0]}x${prev[1]} -> ${size.width}x${size.height}, cancel")
                 finish(onRotated)
             }
         }.semantics { contentDescription = RegionCopy.frozen; role = Role.Image },
