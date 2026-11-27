@@ -1,6 +1,8 @@
 package com.wangzan101.mika.capsule.region
 
 import kotlin.math.hypot
+import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 /** 长按相机按钮:到点算长按之后,松手不再算短按。 */
@@ -38,31 +40,90 @@ internal class CameraPress(private val slopPx: Float) {
     }
 }
 
-internal enum class RegionTool { Box, Mosaic, Arrow, Text }
+/** 框选示例:斜向画出一角,停大约一秒,再淡出。只播这一遍。 */
+internal object HintMotion {
+    const val DRAW_MS = 900L
+    const val PAUSE_MS = 1000L
+    const val FADE_MS = 400L
+    const val TOTAL_MS = DRAW_MS + PAUSE_MS + FADE_MS
+    const val START_X = 0.239f
+    const val START_Y = 0.321f
+    const val END_X = 0.761f
+    const val END_Y = 0.551f
+
+    fun frame(elapsedMs: Long, viewW: Int, viewH: Int): HintFrame? {
+        if (elapsedMs < 0 || viewW <= 0 || viewH <= 0 || elapsedMs >= TOTAL_MS) return null
+        val sx = viewW * START_X
+        val sy = viewH * START_Y
+        val ex = viewW * END_X
+        val ey = viewH * END_Y
+        val drawT = elapsedMs.coerceAtMost(DRAW_MS).toFloat() / DRAW_MS
+        val eased = 1f - (1f - drawT) * (1f - drawT) * (1f - drawT)
+        val x = sx + (ex - sx) * eased
+        val y = sy + (ey - sy) * eased
+        val opacity = if (elapsedMs <= DRAW_MS + PAUSE_MS) 1f
+        else 1f - (elapsedMs - DRAW_MS - PAUSE_MS).toFloat() / FADE_MS
+        return HintFrame(
+            left = min(sx, x),
+            top = min(sy, y),
+            right = max(sx, x).coerceAtLeast(min(sx, x) + HINT_MIN),
+            bottom = max(sy, y).coerceAtLeast(min(sy, y) + HINT_MIN),
+            opacity = opacity.coerceIn(0f, 1f),
+            fingerX = x,
+            fingerY = y,
+        )
+    }
+
+    private const val HINT_MIN = 8f
+}
+
+internal data class HintFrame(
+    val left: Float,
+    val top: Float,
+    val right: Float,
+    val bottom: Float,
+    val opacity: Float,
+    val fingerX: Float,
+    val fingerY: Float,
+)
+
+/** 马赛克是一级打码。框选、涂抹、箭头是「标记」里的三种,框选只在已有选区上画矩形。 */
+internal enum class RegionTool { Mosaic, Box, Smear, Arrow, Text }
+
+internal enum class RegionStage { Hint, Idle, Dragging, Selected, Editing }
+
+/**
+ * 框选前和拖动中只有取消。松手后才是重画、编辑、完成。
+ * 编辑换成马赛克、标记、文字、完成;标记再向上弹出框选、涂抹、箭头。
+ */
+internal enum class RegionChrome { None, Actions, Tools }
 
 internal enum class BoxHandle { Create, Move, N, S, E, W, NE, NW, SE, SW }
 
 internal sealed class RegionMark {
     data class Mosaic(val rect: PxRect) : RegionMark()
+    data class Box(val rect: PxRect) : RegionMark()
+    data class Smear(val points: List<Pair<Float, Float>>, val radius: Float) : RegionMark()
     data class Arrow(val x1: Float, val y1: Float, val x2: Float, val y2: Float) : RegionMark()
     data class Label(val text: String, val bounds: PxRect) : RegionMark()
 }
 
+/** [tool] 为空是在拉选区;有工具才是在选区里标注。 */
 internal data class RegionDrag(
-    val tool: RegionTool,
+    val tool: RegionTool?,
     val handle: BoxHandle,
     val startX: Float,
     val startY: Float,
     val origin: PxRect?,
     val x: Float,
     val y: Float,
+    val points: List<Pair<Float, Float>> = emptyList(),
 )
 
 internal data class EditorModel(
     val bitmapW: Int,
     val bitmapH: Int,
     val selection: PxRect? = null,
-    val tool: RegionTool = RegionTool.Box,
     val marks: List<RegionMark> = emptyList(),
     val drag: RegionDrag? = null,
     val textAt: Pair<Float, Float>? = null,
@@ -81,6 +142,15 @@ internal fun confirmedCrop(model: EditorModel, minPx: Int = MIN_CONFIRM): PxRect
 
 internal data class RegionEdit(val crop: PxRect, val marks: List<RegionMark>)
 
+/** 完成放进待发图,取消回到原来的草稿。两条路都不发送。 */
+internal enum class RegionDelivery { Restore, Pending }
+
+internal fun regionDelivery(edit: RegionEdit?): RegionDelivery {
+    val crop = edit?.crop ?: return RegionDelivery.Restore
+    if (crop.width < MIN_CONFIRM || crop.height < MIN_CONFIRM) return RegionDelivery.Restore
+    return RegionDelivery.Pending
+}
+
 /**
  * 卡片里已有的字和待发截图:取消原样留下,确认只换上新的选区。
  * [screenToken] 为 null 表示本来没有待发图;非 null 的替换值表示换成这一张。
@@ -90,86 +160,201 @@ internal data class RegionInputState(val draft: String, val open: Boolean, val s
 internal fun regionInputAfter(previous: RegionInputState, replacement: String?): RegionInputState =
     if (replacement == null) previous else previous.copy(screenToken = replacement)
 
-/** 框选、移动、改大小,以及可选的马赛克、箭头、文字。标不标注都能完成。 */
-internal object RegionGestures {
-    fun tool(model: EditorModel, tool: RegionTool): EditorModel = model.copy(tool = tool, drag = null, textAt = null)
+/**
+ * 冻结之后的交互。示例动画只在进入时播一次,手指一点就停,重画也不会再播。
+ * 底部操作要等选区松手才出现。
+ */
+internal data class RegionFlow(
+    val stage: RegionStage = RegionStage.Hint,
+    val model: EditorModel,
+    val tool: RegionTool? = null,
+    val markMenu: Boolean = false,
+    val hintConsumed: Boolean = false,
+) {
+    val chrome: RegionChrome
+        get() = when (stage) {
+            RegionStage.Selected -> RegionChrome.Actions
+            RegionStage.Editing -> RegionChrome.Tools
+            RegionStage.Hint, RegionStage.Idle, RegionStage.Dragging -> RegionChrome.None
+        }
 
-    fun undo(model: EditorModel): EditorModel = model.copy(marks = model.marks.dropLast(1), drag = null)
+    fun hintFrame(elapsedMs: Long, viewW: Int, viewH: Int): HintFrame? =
+        if (stage == RegionStage.Hint) HintMotion.frame(elapsedMs, viewW, viewH) else null
 
-    fun down(model: EditorModel, map: FrameMap, vx: Float, vy: Float, handlePx: Float): EditorModel {
-        val (x, y) = map.viewToBitmap(vx, vy) ?: return model
-        val selection = model.selection
-        return when (model.tool) {
-            RegionTool.Box -> {
-                val handle = if (selection == null) BoxHandle.Create else hitBox(selection, map, vx, vy, handlePx)
-                val origin = if (handle == BoxHandle.Create) null else selection
-                model.copy(drag = RegionDrag(RegionTool.Box, handle, x, y, origin, x, y), textAt = null)
-            }
-            RegionTool.Mosaic, RegionTool.Arrow, RegionTool.Text -> {
-                if (selection == null || !selection.contains(x.toInt(), y.toInt())) return model.copy(textAt = null)
-                model.copy(drag = RegionDrag(model.tool, BoxHandle.Create, x, y, selection, x, y), textAt = null)
-            }
+    fun afterHintClock(elapsedMs: Long, viewW: Int, viewH: Int): RegionFlow {
+        if (stage != RegionStage.Hint) return this
+        if (HintMotion.frame(elapsedMs, viewW, viewH) != null) return this
+        return copy(stage = RegionStage.Idle, hintConsumed = true)
+    }
+
+    /** 系统关了动画时直接停在空白蒙层,不补播。 */
+    fun skipHint(): RegionFlow =
+        if (stage == RegionStage.Hint) copy(stage = RegionStage.Idle, hintConsumed = true) else this
+
+    fun pointerDown(map: FrameMap, vx: Float, vy: Float, handlePx: Float): RegionFlow {
+        val base = if (stage == RegionStage.Hint) copy(stage = RegionStage.Idle, hintConsumed = true) else this
+        return when (base.stage) {
+            RegionStage.Hint -> base
+            RegionStage.Idle, RegionStage.Dragging -> base.beginSelection(map, vx, vy)
+            RegionStage.Selected -> base.adjustOrReselect(map, vx, vy, handlePx)
+            RegionStage.Editing -> base.beginMark(map, vx, vy)
         }
     }
 
-    fun move(model: EditorModel, map: FrameMap, vx: Float, vy: Float): EditorModel {
-        val drag = model.drag ?: return model
-        val (x, y) = map.viewToBitmapClamped(vx, vy)
-        val next = drag.copy(x = x, y = y)
-        val selection = if (drag.tool == RegionTool.Box) boxFromDrag(next, model.bounds) else model.selection
-        return model.copy(drag = next, selection = selection)
+    fun pointerMove(map: FrameMap, vx: Float, vy: Float): RegionFlow {
+        val drag = model.drag ?: return this
+        val (bx, by) = map.viewToBitmapClamped(vx, vy)
+        val (x, y) = if (drag.tool != null && drag.origin != null) clampPoint(bx, by, drag.origin) else bx to by
+        val points = if (drag.tool == RegionTool.Smear) drag.points + (x to y) else drag.points
+        val next = drag.copy(x = x, y = y, points = points)
+        val selection = if (drag.tool == null) boxFromDrag(next, model.bounds) else model.selection
+        return copy(model = model.copy(drag = next, selection = selection))
     }
 
-    fun up(model: EditorModel): EditorModel {
-        val drag = model.drag ?: return model
-        return when (drag.tool) {
-            RegionTool.Box -> {
-                val rect = model.selection?.takeIf { it.width >= 2 && it.height >= 2 }
-                model.copy(selection = rect, drag = null)
-            }
-            RegionTool.Mosaic -> {
-                val rect = mosaicFromDrag(drag)?.takeIf { it.width >= MIN_MARK && it.height >= MIN_MARK }
-                val clipped = rect?.intersect(drag.origin ?: return model.copy(drag = null))
-                    ?.takeIf { it.width >= 2 && it.height >= 2 }
-                model.copy(marks = if (clipped == null) model.marks else model.marks + RegionMark.Mosaic(clipped), drag = null)
-            }
-            RegionTool.Arrow -> {
-                val far = hypot(drag.x - drag.startX, drag.y - drag.startY) >= MIN_MARK
-                val marks = if (far) model.marks + RegionMark.Arrow(drag.startX, drag.startY, drag.x, drag.y) else model.marks
-                model.copy(marks = marks, drag = null)
-            }
-            RegionTool.Text -> {
-                val tapped = hypot(drag.x - drag.startX, drag.y - drag.startY) <= TEXT_TAP_PX
-                val inside = drag.origin?.contains(drag.startX.toInt(), drag.startY.toInt()) == true
-                model.copy(drag = null, textAt = if (tapped && inside) drag.startX to drag.startY else null)
-            }
-        }
+    fun pointerUp(map: FrameMap): RegionFlow {
+        val drag = model.drag ?: return this
+        return if (drag.tool == null) finishSelection(map, drag) else copy(model = commitMark(drag))
     }
 
-    fun dismissText(model: EditorModel): EditorModel = model.copy(textAt = null)
+    /** 清掉选区和标注,回到可以再拖的蒙层。不重播示例。 */
+    fun redraw(): RegionFlow = copy(
+        stage = RegionStage.Idle,
+        tool = null,
+        markMenu = false,
+        hintConsumed = true,
+        model = model.copy(selection = null, marks = emptyList(), drag = null, textAt = null),
+    )
 
-    /** 文字落在选区里;放不下就挪进选区,仍放不下就丢掉,不会写到选区外面。 */
-    fun placeText(model: EditorModel, text: String, textPx: Int): EditorModel {
-        val at = model.textAt ?: return model
-        val selection = model.selection ?: return model.copy(textAt = null)
-        val trimmed = text.trim()
-        if (trimmed.isEmpty()) return model.copy(textAt = null)
-        val raw = labelBounds(trimmed, at.first, at.second, textPx)
-        val bounds = shiftInside(raw, selection) ?: return model.copy(textAt = null)
-        return model.copy(marks = model.marks + RegionMark.Label(trimmed, bounds), textAt = null)
-    }
+    fun edit(): RegionFlow =
+        if (stage == RegionStage.Selected || stage == RegionStage.Editing) copy(stage = RegionStage.Editing, markMenu = false) else this
 
-    fun previewMosaic(model: EditorModel): PxRect? {
-        val drag = model.drag ?: return null
-        if (drag.tool != RegionTool.Mosaic) return null
-        return mosaicFromDrag(drag)?.intersect(drag.origin ?: return null)
-    }
+    fun toggleMarkMenu(): RegionFlow =
+        if (stage != RegionStage.Editing) this else copy(markMenu = !markMenu)
 
-    fun previewArrow(model: EditorModel): RegionMark.Arrow? {
+    fun pick(next: RegionTool): RegionFlow =
+        if (stage != RegionStage.Editing) this else copy(tool = next, markMenu = false, model = model.copy(drag = null, textAt = null))
+
+    fun dismissText(): RegionFlow = copy(model = model.copy(textAt = null))
+
+    fun placeText(text: String, textPx: Int): RegionFlow = copy(model = placeLabel(model, text, textPx))
+
+    fun previewMosaic(): PxRect? = previewRect(RegionTool.Mosaic)
+
+    fun previewBox(): PxRect? = previewRect(RegionTool.Box)
+
+    fun previewArrow(): RegionMark.Arrow? {
         val drag = model.drag ?: return null
         if (drag.tool != RegionTool.Arrow) return null
         return RegionMark.Arrow(drag.startX, drag.startY, drag.x, drag.y)
     }
+
+    fun previewSmear(): RegionMark.Smear? {
+        val drag = model.drag ?: return null
+        if (drag.tool != RegionTool.Smear || drag.points.isEmpty()) return null
+        val radius = drag.origin?.let(::smearRadius) ?: return null
+        return RegionMark.Smear(drag.points, radius)
+    }
+
+    private fun beginSelection(map: FrameMap, vx: Float, vy: Float): RegionFlow {
+        val (x, y) = map.viewToBitmap(vx, vy) ?: return this
+        val drag = RegionDrag(null, BoxHandle.Create, x, y, null, x, y)
+        return copy(
+            stage = RegionStage.Dragging,
+            tool = null,
+            markMenu = false,
+            model = model.copy(drag = drag, selection = boxFromDrag(drag, model.bounds), textAt = null),
+        )
+    }
+
+    private fun adjustOrReselect(map: FrameMap, vx: Float, vy: Float, handlePx: Float): RegionFlow {
+        val sel = model.selection ?: return beginSelection(map, vx, vy)
+        val handle = hitBox(sel, map, vx, vy, handlePx)
+        if (handle == BoxHandle.Create) return beginSelection(map, vx, vy)
+        val (x, y) = map.viewToBitmapClamped(vx, vy)
+        return copy(
+            stage = RegionStage.Dragging,
+            markMenu = false,
+            model = model.copy(drag = RegionDrag(null, handle, x, y, sel, x, y), textAt = null),
+        )
+    }
+
+    private fun beginMark(map: FrameMap, vx: Float, vy: Float): RegionFlow {
+        val active = tool ?: return copy(markMenu = false)
+        val selection = model.selection ?: return copy(markMenu = false)
+        val raw = map.viewToBitmap(vx, vy) ?: return copy(markMenu = false)
+        if (!selection.contains(raw.first.toInt(), raw.second.toInt())) return copy(markMenu = false)
+        val (x, y) = clampPoint(raw.first, raw.second, selection)
+        val points = if (active == RegionTool.Smear) listOf(x to y) else emptyList()
+        return copy(
+            markMenu = false,
+            model = model.copy(
+                drag = RegionDrag(active, BoxHandle.Create, x, y, selection, x, y, points),
+                textAt = null,
+            ),
+        )
+    }
+
+    private fun finishSelection(map: FrameMap, drag: RegionDrag): RegionFlow {
+        val rect = boxFromDrag(drag, model.bounds).takeIf { it.width >= 2 && it.height >= 2 }
+        val fresh = drag.handle == BoxHandle.Create
+        if (rect == null || rect.width < MIN_CONFIRM || rect.height < MIN_CONFIRM || (fresh && !viewLarge(map, rect))) {
+            return copy(
+                stage = RegionStage.Idle,
+                tool = null,
+                markMenu = false,
+                model = model.copy(selection = null, marks = emptyList(), drag = null, textAt = null),
+            )
+        }
+        return copy(
+            stage = RegionStage.Selected,
+            tool = null,
+            markMenu = false,
+            model = model.copy(selection = rect, marks = if (fresh) emptyList() else model.marks, drag = null, textAt = null),
+        )
+    }
+
+    private fun commitMark(drag: RegionDrag): EditorModel {
+        val selection = drag.origin
+        val marks = when (drag.tool) {
+            RegionTool.Mosaic -> marked(drag, model.marks, selection) { RegionMark.Mosaic(it) }
+            RegionTool.Box -> marked(drag, model.marks, selection) { RegionMark.Box(it) }
+            RegionTool.Smear -> {
+                val box = selection ?: return model.copy(drag = null)
+                if (pathLength(drag.points) < MIN_MARK) model.marks
+                else model.marks + RegionMark.Smear(drag.points, smearRadius(box))
+            }
+            RegionTool.Arrow -> {
+                val far = hypot(drag.x - drag.startX, drag.y - drag.startY) >= MIN_MARK
+                if (far) model.marks + RegionMark.Arrow(drag.startX, drag.startY, drag.x, drag.y) else model.marks
+            }
+            RegionTool.Text, null -> model.marks
+        }
+        val textAt = if (drag.tool == RegionTool.Text &&
+            hypot(drag.x - drag.startX, drag.y - drag.startY) <= TEXT_TAP_PX &&
+            selection?.contains(drag.startX.toInt(), drag.startY.toInt()) == true
+        ) drag.startX to drag.startY else null
+        return model.copy(marks = marks, drag = null, textAt = textAt)
+    }
+
+    private fun marked(drag: RegionDrag, marks: List<RegionMark>, selection: PxRect?, build: (PxRect) -> RegionMark): List<RegionMark> {
+        val rect = rectInside(drag, selection)?.takeIf { it.width >= MIN_MARK && it.height >= MIN_MARK }
+        return if (rect == null) marks else marks + build(rect)
+    }
+
+    private fun previewRect(tool: RegionTool): PxRect? {
+        val drag = model.drag ?: return null
+        if (drag.tool != tool) return null
+        return rectInside(drag, drag.origin)
+    }
+
+    companion object {
+        fun start(bitmapW: Int, bitmapH: Int) = RegionFlow(model = EditorModel(bitmapW, bitmapH))
+    }
+}
+
+internal fun smearRadius(selection: PxRect): Float {
+    val side = min(selection.width, selection.height).toFloat()
+    return (side / 18f).coerceIn(10f, 36f)
 }
 
 internal fun hitBox(sel: PxRect, map: FrameMap, vx: Float, vy: Float, handlePx: Float): BoxHandle {
@@ -218,6 +403,16 @@ internal fun shiftInside(rect: PxRect, box: PxRect): PxRect? {
     return PxRect(l, t, l + w, t + h)
 }
 
+private fun placeLabel(model: EditorModel, text: String, textPx: Int): EditorModel {
+    val at = model.textAt ?: return model
+    val selection = model.selection ?: return model.copy(textAt = null)
+    val trimmed = text.trim()
+    if (trimmed.isEmpty()) return model.copy(textAt = null)
+    val raw = labelBounds(trimmed, at.first, at.second, textPx)
+    val bounds = shiftInside(raw, selection) ?: return model.copy(textAt = null)
+    return model.copy(marks = model.marks + RegionMark.Label(trimmed, bounds), textAt = null)
+}
+
 private fun boxFromDrag(drag: RegionDrag, bounds: PxRect): PxRect = when (drag.handle) {
     BoxHandle.Create -> boxInside(drag.startX.roundToInt(), drag.startY.roundToInt(), drag.x.roundToInt(), drag.y.roundToInt(), bounds)
     BoxHandle.Move -> {
@@ -249,14 +444,37 @@ private fun resize(origin: PxRect, handle: BoxHandle, x: Float, y: Float, bounds
     return boxInside(l, t, r, b, bounds)
 }
 
-private fun mosaicFromDrag(drag: RegionDrag): PxRect? {
-    if (drag.tool != RegionTool.Mosaic) return null
-    val bounds = drag.origin ?: return null
-    return boxInside(drag.startX.roundToInt(), drag.startY.roundToInt(), drag.x.roundToInt(), drag.y.roundToInt(), bounds)
+private fun rectInside(drag: RegionDrag, bounds: PxRect?): PxRect? {
+    val box = bounds ?: return null
+    return boxInside(drag.startX.roundToInt(), drag.startY.roundToInt(), drag.x.roundToInt(), drag.y.roundToInt(), box)
+}
+
+private fun viewLarge(map: FrameMap, rect: PxRect): Boolean {
+    val view = map.viewRectOf(rect)
+    return view.r - view.l >= MIN_SELECTION_VIEW && view.b - view.t >= MIN_SELECTION_VIEW
+}
+
+private fun clampPoint(x: Float, y: Float, box: PxRect): Pair<Float, Float> {
+    val right = (box.r - 1).coerceAtLeast(box.l).toFloat()
+    val bottom = (box.b - 1).coerceAtLeast(box.t).toFloat()
+    return x.coerceIn(box.l.toFloat(), right) to y.coerceIn(box.t.toFloat(), bottom)
+}
+
+private fun pathLength(points: List<Pair<Float, Float>>): Float {
+    var total = 0f
+    for (i in 0 until points.lastIndex) {
+        val a = points[i]
+        val b = points[i + 1]
+        total += hypot(b.first - a.first, b.second - a.second)
+    }
+    return total
 }
 
 /** 选区短边小于它就不能完成,避免裁出空图;不会为了达到它去多裁。 */
 internal const val MIN_CONFIRM = 8
+
+/** 新拉出来的选区,在屏幕上短边至少这么多才算框完。 */
+internal const val MIN_SELECTION_VIEW = 36f
 
 private const val MIN_MARK = 8
 private const val TEXT_TAP_PX = 12f

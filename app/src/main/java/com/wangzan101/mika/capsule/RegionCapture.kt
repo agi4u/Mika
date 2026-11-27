@@ -13,12 +13,13 @@ import com.wangzan101.mika.cap.phone.a11y.OverlayWindow
 import com.wangzan101.mika.cap.phone.a11y.PhoneOcr
 import com.wangzan101.mika.cap.phone.a11y.ScreenAccessibility
 import com.wangzan101.mika.capsule.CapsuleController.Companion.TAG
-import com.wangzan101.mika.capsule.region.MIN_CONFIRM
 import com.wangzan101.mika.capsule.region.RegionBitmap
 import com.wangzan101.mika.capsule.region.RegionCaptureOverlay
+import com.wangzan101.mika.capsule.region.RegionDelivery
 import com.wangzan101.mika.capsule.region.RegionEdit
 import com.wangzan101.mika.capsule.region.RegionInputState
 import com.wangzan101.mika.capsule.region.RegionText
+import com.wangzan101.mika.capsule.region.regionDelivery
 import com.wangzan101.mika.capsule.region.regionInputAfter
 import com.wangzan101.mika.capsule.region.spansOf
 import com.wangzan101.mika.chat.ui.screenThumbnail
@@ -74,12 +75,14 @@ internal fun CapsuleController.startRegionCapture() {
                             }
                             val edit = editRegion(bmp, fresh.area.insetTop, fresh.area.insetBottom)
                             val crop = edit?.crop
+                            val delivery = regionDelivery(edit)
                             Log.i(
                                 TAG,
-                                if (edit == null || crop == null) "region-result=cancel"
-                                else "region-result=confirm crop=${crop.l},${crop.t},${crop.r},${crop.b} ${crop.width}x${crop.height} marks=${edit.marks.joinToString(",") { it::class.simpleName ?: "?" }}",
+                                if (delivery == RegionDelivery.Restore || crop == null) "region-result=cancel"
+                                else "region-result=confirm pending crop=${crop.l},${crop.t},${crop.r},${crop.b} ${crop.width}x${crop.height} marks=${edit.marks.joinToString(",") { it::class.simpleName ?: "?" }}",
                             )
-                            if (edit == null || crop == null || crop.width < MIN_CONFIRM || crop.height < MIN_CONFIRM) {
+                            // 完成只挂上待发图,不调用发送,也不写入系统相册。
+                            if (delivery == RegionDelivery.Restore || edit == null || crop == null) {
                                 restoreRegionInput(snapshot, null)
                                 reopen = snapshot.open && expanded
                             } else if (fresh.sources.any { !(context.applicationContext as MikaApp).appAccess.current().canShare(it) }) {
@@ -182,7 +185,7 @@ private suspend fun CapsuleController.editRegion(bitmap: Bitmap, insetTop: Int, 
             if (rotated) Toast.makeText(context, tr(R.string.region_capture_rotated), Toast.LENGTH_SHORT).show()
             cont.resume(result)
         }
-        val opened = host.open(OverlayPlacement(Gravity.TOP or Gravity.LEFT), secure = true) {
+        val opened = host.open(OverlayPlacement(Gravity.TOP or Gravity.START), secure = true) {
             MikaTheme(reduceMotion = animationsOff(context)) {
                 RegionCaptureOverlay(
                     bitmap = bitmap,

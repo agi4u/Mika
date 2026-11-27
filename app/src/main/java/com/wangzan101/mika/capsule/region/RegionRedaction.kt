@@ -5,6 +5,8 @@ import com.wangzan101.mika.core.screen.uistate.VisibleTextLine
 import com.wangzan101.mika.core.screen.uistate.normalize
 import com.wangzan101.mika.core.screen.user.ScreenLine
 import com.wangzan101.mika.core.screen.user.UserScreenText
+import kotlin.math.hypot
+import kotlin.math.max
 import kotlin.math.min
 
 /** 一行可读文字在截图像素里的范围。[secret] 的内容整行丢掉,不进模型。 */
@@ -44,7 +46,8 @@ internal fun spansOf(
 
 /**
  * 发给模型的字只留选区里的。跨出选区的整行丢掉(没有逐字边界,不能只切一半)。
- * 马赛克按涂抹顺序盖住的行也丢掉;之后写在马赛克上的字留下。
+ * 马赛克和涂抹按顺序盖住的行也丢掉;之后写在盖住区域上的字留下。
+ * 框选只是矩形描边,不遮住里面的字。
  * 坐标换成选区自己的 0–999,不再用整屏的位置。
  */
 internal object RegionText {
@@ -62,7 +65,11 @@ internal object RegionText {
                     val box = mark.rect.intersect(crop) ?: continue
                     live = live.filterNot { it.bounds.intersects(box, TOLERANCE) }
                 }
-                is RegionMark.Arrow -> Unit
+                is RegionMark.Smear -> {
+                    if (mark.points.isEmpty()) continue
+                    live = live.filterNot { strokeHits(it.bounds, mark.points, mark.radius, TOLERANCE.toFloat()) }
+                }
+                is RegionMark.Box, is RegionMark.Arrow -> Unit
                 is RegionMark.Label -> {
                     if (mark.text.isBlank()) continue
                     if (!crop.contains(mark.bounds, TOLERANCE)) continue
@@ -146,6 +153,79 @@ internal fun mosaicPixels(pixels: IntArray, width: Int, height: Int, rect: PxRec
             x += step
         }
         y += step
+    }
+    return out
+}
+
+/** 涂抹盖住的颜色。不透明,盖住的原像素不再留在图里。 */
+internal const val SMEAR_INK = 0xFF1A1A1A.toInt()
+
+/**
+ * 笔画是否擦过 [rect]。按笔半径取样,多出来的 [extra] 用来吸收坐标舍入。
+ * 没擦到的字不会因为落在笔画外接矩形里就被丢掉。
+ */
+internal fun strokeHits(rect: PxRect, points: List<Pair<Float, Float>>, radius: Float, extra: Float = 0f): Boolean {
+    if (points.isEmpty() || rect.empty || radius < 0f) return false
+    val reach = radius + extra
+    val reach2 = reach * reach
+    fun near(x: Float, y: Float): Boolean {
+        val dx = when {
+            x < rect.l -> rect.l - x
+            x > rect.r -> x - rect.r
+            else -> 0f
+        }
+        val dy = when {
+            y < rect.t -> rect.t - y
+            y > rect.b -> y - rect.b
+            else -> 0f
+        }
+        return dx * dx + dy * dy <= reach2
+    }
+    if (points.size == 1) return near(points[0].first, points[0].second)
+    val step = max(1f, radius / 2f)
+    for (i in 0 until points.lastIndex) {
+        val a = points[i]
+        val b = points[i + 1]
+        val steps = hypot(b.first - a.first, b.second - a.second).div(step).toInt().coerceIn(1, 64)
+        for (s in 0..steps) {
+            val t = s.toFloat() / steps
+            if (near(a.first + (b.first - a.first) * t, a.second + (b.second - a.second) * t)) return true
+        }
+    }
+    return false
+}
+
+/** 沿笔画把像素涂成 [color]。笔迹外的像素原样留下。 */
+internal fun smearPixels(
+    pixels: IntArray,
+    width: Int,
+    height: Int,
+    points: List<Pair<Float, Float>>,
+    radius: Float,
+    color: Int,
+): IntArray {
+    val out = pixels.copyOf()
+    if (points.isEmpty() || radius <= 0f || width <= 0 || height <= 0) return out
+    var minX = width
+    var minY = height
+    var maxX = 0
+    var maxY = 0
+    points.forEach { (x, y) ->
+        minX = min(minX, x.toInt())
+        minY = min(minY, y.toInt())
+        maxX = max(maxX, x.toInt())
+        maxY = max(maxY, y.toInt())
+    }
+    val pad = radius.toInt() + 1
+    val left = (minX - pad).coerceIn(0, width - 1)
+    val top = (minY - pad).coerceIn(0, height - 1)
+    val right = (maxX + pad + 1).coerceIn(left + 1, width)
+    val bottom = (maxY + pad + 1).coerceIn(top + 1, height)
+    for (y in top until bottom) {
+        val row = y * width
+        for (x in left until right) {
+            if (strokeHits(PxRect(x, y, x + 1, y + 1), points, radius)) out[row + x] = color
+        }
     }
     return out
 }

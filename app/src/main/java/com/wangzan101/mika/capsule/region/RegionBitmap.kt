@@ -6,13 +6,14 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.Rect
+import android.graphics.RectF
 import android.graphics.Typeface
 import java.io.ByteArrayOutputStream
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
 
-/** 把标注画进截图,马赛克改掉像素,再只留下选区。整屏那张用完由调用方回收,这里不另存一份。 */
+/** 把标注画进截图,马赛克和涂抹改掉像素,再只留下选区。整屏那张用完由调用方回收,这里不另存一份。 */
 internal object RegionBitmap {
     const val JPEG_QUALITY = 88
 
@@ -24,6 +25,8 @@ internal object RegionBitmap {
             for (mark in marks) {
                 when (mark) {
                     is RegionMark.Mosaic -> mosaicBitmap(full, mark.rect)
+                    is RegionMark.Smear -> smearBitmap(full, mark)
+                    is RegionMark.Box -> drawBox(Canvas(full), mark)
                     is RegionMark.Arrow -> drawArrow(Canvas(full), mark)
                     is RegionMark.Label -> drawLabel(Canvas(full), mark)
                 }
@@ -45,6 +48,29 @@ internal object RegionBitmap {
         bmp.getPixels(pixels, 0, bmp.width, 0, 0, bmp.width, bmp.height)
         val next = mosaicPixels(pixels, bmp.width, bmp.height, area, mosaicBlock(area.width, area.height))
         bmp.setPixels(next, 0, bmp.width, 0, 0, bmp.width, bmp.height)
+    }
+
+    private fun smearBitmap(bmp: Bitmap, mark: RegionMark.Smear) {
+        if (mark.points.isEmpty()) return
+        val pixels = IntArray(bmp.width * bmp.height)
+        bmp.getPixels(pixels, 0, bmp.width, 0, 0, bmp.width, bmp.height)
+        val next = smearPixels(pixels, bmp.width, bmp.height, mark.points, mark.radius, SMEAR_INK)
+        bmp.setPixels(next, 0, bmp.width, 0, 0, bmp.width, bmp.height)
+    }
+
+    private fun drawBox(canvas: Canvas, mark: RegionMark.Box) {
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeJoin = Paint.Join.ROUND
+            strokeCap = Paint.Cap.ROUND
+        }
+        val rect = RectF(mark.rect.l.toFloat(), mark.rect.t.toFloat(), mark.rect.r.toFloat(), mark.rect.b.toFloat())
+        paint.color = Color.BLACK
+        paint.strokeWidth = 10f
+        canvas.drawRect(rect, paint)
+        paint.color = Color.WHITE
+        paint.strokeWidth = 5f
+        canvas.drawRect(rect, paint)
     }
 
     private fun drawArrow(canvas: Canvas, mark: RegionMark.Arrow) {

@@ -280,6 +280,24 @@ object MikaIcons {
     )
     /** 实心:播放(操作回放)。 */
     val Play = filled("play", "M8 5 v14 l11 -7 z")
+    /** 区域截图:马赛克。 */
+    val Mosaic = stroke(
+        "mosaic",
+        "M4 4 h6.5 v6.5 h-6.5 z",
+        "M13.5 4 h6.5 v6.5 h-6.5 z",
+        "M4 13.5 h6.5 v6.5 h-6.5 z",
+        "M13.5 13.5 h6.5 v6.5 h-6.5 z",
+    )
+    /** 区域截图:标记。矩形加一枚箭头。 */
+    val Mark = stroke("mark", "M4 6 h9 v7 h-9 z", "M15 12 l5 -6", "M15 6 h5 v5")
+    /** 区域截图:在选区上画矩形。 */
+    val Frame = stroke("frame", "M5 6 h14 v12 h-14 z")
+    /** 区域截图:涂抹。 */
+    val Smear = stroke("smear", "M4 15 c2 -1 3 -4 6 -4 s3 4 6 4 s3 -3 4 -3", "M5 19 c2 -1 3 -3 5 -3 s3 3 5 3 s4 -2 5 -2")
+    /** 区域截图:箭头。 */
+    val Arrow = stroke("arrow", "M5 19 L19 5", "M12 5 h7 v7")
+    /** 区域截图:文字。 */
+    val Letter = stroke("letter", "M5 6 h14", "M12 6 v13", "M8 19 h8")
     /** 实心:感叹号。 */
     val Exclaim = filled(
         "exclaim", "M12 4.5 a1.5 1.5 0 0 1 1.5 1.5 v7.5 a1.5 1.5 0 0 1 -3 0 V6 A1.5 1.5 0 0 1 12 4.5 z",

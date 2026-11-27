@@ -334,4 +334,19 @@
     <string name="chat_example_share">Chia sẻ liên kết dự án Mika https://github.com/wangzan101/mika với một người bạn và nói rằng nó có thể thao tác điện thoại giúp họ.</string>
     <string name="chat_video">Video</string>
     <string name="chat_video_play">Phát</string>
+    <string name="region_capture_action">Chụp một vùng</string>
+    <string name="region_capture_cancel">Hủy</string>
+    <string name="region_capture_done">Xong</string>
+    <string name="region_capture_redraw">Vẽ lại</string>
+    <string name="region_capture_edit">Sửa</string>
+    <string name="region_capture_mosaic">Khảm</string>
+    <string name="region_capture_mark">Đánh dấu</string>
+    <string name="region_capture_box">Khung</string>
+    <string name="region_capture_smear">Bôi</string>
+    <string name="region_capture_arrow">Mũi tên</string>
+    <string name="region_capture_text">Chữ</string>
+    <string name="region_capture_text_hint">Nhập chữ</string>
+    <string name="region_capture_text_place">Đặt chữ</string>
+    <string name="region_capture_frozen">Màn hình đã đóng băng</string>
+    <string name="region_capture_rotated">Màn hình xoay, nên lần chụp vùng này đã bị hủy</string>
 </resources>
